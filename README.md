@@ -66,7 +66,3 @@ python clicker.py
 * Built the core Pygame application (clicker.py) at 900x700 resolution.
 * Added clicking mechanics (clickPIC.jpg), background rendering (bgp.webp), score counters, and pop animations.
 * Created a local JSON save/load system (clicker_save.json).
-
-```
-
-```
