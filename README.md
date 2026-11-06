@@ -1,17 +1,18 @@
 # Mez-Clicker 🎮
 
-A fun and addictive incremental clicker game built in Python using the Pygame library! Click your way to the top, buy powerful upgrades, and watch your score grow automatically.
+An enhanced, data-driven incremental clicker game built in Python using Pygame! Progress through multiple upgrade tiers, unlock passive income, utilize the new Rebirth system, and watch your score soar.
 
-## ✨ Features
-* **Manual & Auto Progress:** Click the picture manually or buy Auto-Clickers and Click Speed upgrades for passive income.
-* **Auto-Save System:** Don't worry about losing progress—your score and upgrades automatically save when you close the game.
-* **Interactive UI:** Features smooth scaling/pop animations and a clean upgrade panel.
+## ✨ New Features in this Version
+* **Tiered Upgrades System:** Purchase multiple structured tiers for Click Power, Passive Income, and Auto-Clicker Speed with dynamic cumulative pricing.
+* **Scrollable Upgrade Panel:** Seamlessly scroll through a rich UI menu using your mouse wheel.
+* **Rebirth System:** Reset your progress to earn a massive global multiplier (`x2.0`) on all future gains.
+* **Robust State Management:** Clean object-oriented architecture (`GameState` class) with a reliable auto-save and load system.
 
 ---
 
 ## 📋 Requirements
-Before running the game, make sure you have **Python** and **Pygame** installed on your system. 
+Make sure you have **Python** and **Pygame** installed on your system before running the game. 
 
-If you don't have Pygame installed yet, you can download it via your terminal:
+If you need to install Pygame, run this in your terminal:
 ```bash
 pip install pygame
