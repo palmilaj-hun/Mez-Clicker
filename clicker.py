@@ -1,25 +1,32 @@
 # ============================================================================
 # CLICKER SIM - inside gyakorlas/ folder ONLY
+# Refactored: tiered upgrades, dynamic pricing, scrollable UI, save/load
 # Uses bgp.webp (background) and clickPIC.jpg (clickable picture)
-# Run:  python clicker.py    (from inside the gyakorlas folder)
+# Run:  python clicker.py   (from inside the gyakorlas folder)
 # ============================================================================
 
-import json
 import os
 import sys
+import json
 import pygame
 
-# --- INITIALIZE PYGAME ---
+# ----------------------------------------------------------------------------
+# STEP 0: INITIALIZE PYGAME
+# ----------------------------------------------------------------------------
 pygame.init()
 
-# --- WINDOW SETTINGS ---
-SCREEN_W, SCREEN_H = 900, 700
+# ----------------------------------------------------------------------------
+# STEP 1: WINDOW SETTINGS
+# ----------------------------------------------------------------------------
+SCREEN_W, SCREEN_H = 1000, 700
 screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
-pygame.display.set_caption("Clicker Sim - Click the Picture!")
+pygame.display.set_caption("Clicker Sim - Tiered Upgrades")
 clock = pygame.time.Clock()
 FPS = 60
 
-# --- COLORS ---
+# ----------------------------------------------------------------------------
+# STEP 2: COLORS
+# ----------------------------------------------------------------------------
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
 GRAY = (100, 100, 100)
@@ -29,134 +36,274 @@ RED = (200, 50, 50)
 YELLOW = (255, 220, 0)
 GREEN = (0, 200, 0)
 PINK = pygame.Color("pink")
+PANEL_BG = (40, 40, 60)
+PANEL_BORDER = WHITE
 
-# --- FONTS ---
+# ----------------------------------------------------------------------------
+# STEP 3: FONTS
+# ----------------------------------------------------------------------------
 font_big = pygame.font.SysFont(None, 48)
 font_med = pygame.font.SysFont(None, 32)
 font_small = pygame.font.SysFont(None, 24)
+font_tiny = pygame.font.SysFont(None, 20)
 
-# --- LOAD ASSETS ---
+# ----------------------------------------------------------------------------
+# STEP 4: LOAD IMAGES FROM THIS FOLDER (gyakorlas/)
+# ----------------------------------------------------------------------------
 BASE = os.path.dirname(os.path.abspath(__file__))
 
-# Background
 bg_path = os.path.join(BASE, "bgp.webp")
 try:
     bg_img = pygame.image.load(bg_path).convert()
     bg_img = pygame.transform.scale(bg_img, (SCREEN_W, SCREEN_H))
+    print("[CLICKER] Loaded background: bgp.webp")
 except (pygame.error, FileNotFoundError):
+    print("[CLICKER] bgp.webp not found, using solid color.")
     bg_img = pygame.Surface((SCREEN_W, SCREEN_H))
     bg_img.fill((30, 30, 50))
 
-# Clickable Picture
 click_path = os.path.join(BASE, "clickPIC.jpg")
 try:
     clicker_img = pygame.image.load(click_path).convert_alpha()
     clicker_img = pygame.transform.scale(clicker_img, (180, 180))
+    print("[CLICKER] Loaded click picture: clickPIC.jpg")
 except (pygame.error, FileNotFoundError):
+    print("[CLICKER] clickPIC.jpg not found, using fallback color.")
     clicker_img = pygame.Surface((180, 180), pygame.SRCALPHA)
     clicker_img.fill(GREEN)
 
 clicker_rect = clicker_img.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2))
 
-# --- SAVE SYSTEM ---
+# ----------------------------------------------------------------------------
+# STEP 5: TIER CONFIGURATION (data-driven upgrade definitions)
+# ----------------------------------------------------------------------------
+# Each category defines the bonus per tier and the base cost per tier.
+# Dynamic pricing: next price = cumulative spent in category + base cost of this tier.
+TIER_CONFIG = {
+    "click_power": {
+        "label": "Click Power",
+        "bonuses": [5, 10, 25, 50, 100, 250, 500, 1000],
+        "base_costs": [10, 50, 200, 800, 3000, 12000, 50000, 200000],
+        "suffix": " per click",
+    },
+    "passive_income": {
+        "label": "Passive Income",
+        "bonuses": [5, 10, 25, 50, 100, 250, 500, 1000],
+        "base_costs": [50, 200, 800, 3000, 12000, 50000, 200000, 800000],
+        "suffix": " per second",
+    },
+    "auto_clicker_speed": {
+        "label": "Auto-Clicker Speed",
+        # Interval in seconds between auto-clicks (lower = faster)
+        "intervals": [1.0, 0.6, 0.4, 0.25, 0.15, 0.1],
+        "base_costs": [100, 500, 2000, 8000, 30000, 100000],
+        "suffix": " interval",
+    },
+}
+
+MAX_TIERS = {
+    "click_power": len(TIER_CONFIG["click_power"]["bonuses"]),
+    "passive_income": len(TIER_CONFIG["passive_income"]["bonuses"]),
+    "auto_clicker_speed": len(TIER_CONFIG["auto_clicker_speed"]["intervals"]),
+}
+
+# ----------------------------------------------------------------------------
+# STEP 6: GAME STATE (encapsulated in a class)
+# ----------------------------------------------------------------------------
+class GameState:
+    """Holds all mutable game progress so we don't rely on scattered globals."""
+
+    def __init__(self):
+        self.score = 0
+        self.click_power = 1          # base click power (starts at 1)
+        self.clicks_total = 0
+
+        # Passive income (points per second)
+        self.click_speed = 0          # sum of passive tier bonuses
+
+        # Auto-clicker
+        self.auto_clicker_count = 0   # how many auto-clickers owned
+        self.auto_clicker_interval = 1.0  # seconds between auto-clicks
+        self.auto_clicker_timer = 0.0
+
+        # Tier levels (how many tiers purchased in each category)
+        self.tier_click_power = 0
+        self.tier_passive_income = 0
+        self.tier_auto_speed = 0
+
+        # Cumulative spend per category (used for dynamic pricing)
+        self.spent_click_power = 0
+        self.spent_passive_income = 0
+        self.spent_auto_speed = 0
+
+        # Rebirth system
+        self.rebirth_count = 0          # how many times rebirthed
+        self.rebirth_cost = 1000        # cost of next rebirth (x10 each time)
+        self.rebirth_multiplier = 1.0   # global multiplier on all gains
+
+    def to_dict(self):
+        return {
+            "score": self.score,
+            "click_power": self.click_power,
+            "clicks_total": self.clicks_total,
+            "click_speed": self.click_speed,
+            "auto_clicker_count": self.auto_clicker_count,
+            "auto_clicker_interval": self.auto_clicker_interval,
+            "tier_click_power": self.tier_click_power,
+            "tier_passive_income": self.tier_passive_income,
+            "tier_auto_speed": self.tier_auto_speed,
+            "spent_click_power": self.spent_click_power,
+            "spent_passive_income": self.spent_passive_income,
+            "spent_auto_speed": self.spent_auto_speed,
+            "rebirth_count": self.rebirth_count,
+            "rebirth_cost": self.rebirth_cost,
+            "rebirth_multiplier": self.rebirth_multiplier,
+        }
+
+    @classmethod
+    def from_dict(cls, d):
+        s = cls()
+        s.score = d.get("score", 0)
+        s.click_power = d.get("click_power", 1)
+        s.clicks_total = d.get("clicks_total", 0)
+        s.click_speed = d.get("click_speed", 0)
+        s.auto_clicker_count = d.get("auto_clicker_count", 0)
+        s.auto_clicker_interval = d.get("auto_clicker_interval", 1.0)
+        s.tier_click_power = d.get("tier_click_power", 0)
+        s.tier_passive_income = d.get("tier_passive_income", 0)
+        s.tier_auto_speed = d.get("tier_auto_speed", 0)
+        s.spent_click_power = d.get("spent_click_power", 0)
+        s.spent_passive_income = d.get("spent_passive_income", 0)
+        s.spent_auto_speed = d.get("spent_auto_speed", 0)
+        s.rebirth_count = d.get("rebirth_count", 0)
+        s.rebirth_cost = d.get("rebirth_cost", 1000)
+        s.rebirth_multiplier = d.get("rebirth_multiplier", 1.0)
+        return s
+
+
+# ----------------------------------------------------------------------------
+# STEP 7: SAVE / LOAD SYSTEM
+# ----------------------------------------------------------------------------
 SAVE_FILE = os.path.join(BASE, "clicker_save.json")
 
 
-def save_game(
-    score, clk_p, clk_total, clk_spd, auto_cnt, upg_p, clk_spd_p, auto_p
-):
-    data = {
-        "score": score,
-        "clk_p": clk_p,
-        "clk_total": clk_total,
-        "clk_spd": clk_spd,
-        "auto_cnt": auto_cnt,
-        "upg_p": upg_p,
-        "clk_spd_p": clk_spd_p,
-        "auto_p": auto_p,
-    }
+def save_game(state):
     try:
         with open(SAVE_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+            json.dump(state.to_dict(), f, indent=2)
     except Exception as e:
         print(f"[CLICKER] Save failed: {e}")
 
 
 def load_game():
-    default = {
-        "score": 0,
-        "clk_p": 1,
-        "clk_total": 0,
-        "clk_spd": 0,
-        "auto_cnt": 0,
-        "upg_p": 10,
-        "clk_spd_p": 50,
-        "auto_p": 100,
-    }
     try:
         with open(SAVE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        for key, val in default.items():
-            if key not in data:
-                data[key] = val
-        return data
-    except (FileNotFoundError, json.JSONDecodeError, Exception):
-        return default
+            d = json.load(f)
+        print("[CLICKER] Save file loaded.")
+        return GameState.from_dict(d)
+    except (FileNotFoundError, json.JSONDecodeError, Exception) as e:
+        print(f"[CLICKER] No save file found, starting fresh. ({e})")
+        return GameState()
 
 
-# --- GAME STATE ---
-score = 0
-clk_p = 1
-clk_total = 0
-clk_spd = 0
-auto_cnt = 0
-auto_timer = 0.0
+# ----------------------------------------------------------------------------
+# STEP 8: UPGRADE CLASS (data-driven, reusable for any tier)
+# ----------------------------------------------------------------------------
+class Upgrade:
+    """
+    Represents a single purchasable tier of an upgrade category.
+    self.name   : display text
+    self.price  : current cost to buy this tier
+    self.category: which stat it affects
+    self.tier_index: which tier number this is (0-based)
+    self.bonus  : the bonus value applied when purchased
+    """
 
-pop_timer = 0
-pop_scale = 1.0
-
-upg_p = 10
-clk_spd_p = 50
-auto_p = 100
-
-# Load saved game
-saved = load_game()
-score = saved["score"]
-clk_p = saved["clk_p"]
-clk_total = saved["clk_total"]
-clk_spd = saved["clk_spd"]
-auto_cnt = saved["auto_cnt"]
-upg_p = saved["upg_p"]
-clk_spd_p = saved["clk_spd_p"]
-auto_p = saved["auto_p"]
-
-upgrades_open = False
-
-
-# --- BUTTON CLASSES ---
-class ButtonBase:
-
-    def __init__(
-        self, x, y, w, h, name, price, color, hover_color, text_color=WHITE
-    ):
+    def __init__(self, category, tier_index, x, y, w, h):
+        self.category = category
+        self.tier_index = tier_index
         self.rect = pygame.Rect(x, y, w, h)
-        self.name = name
-        self.price = price
-        self.color = color
-        self.hover_color = hover_color
-        self.text_color = text_color
         self.is_hovered = False
+
+        cfg = TIER_CONFIG[category]
+        if "bonuses" in cfg:
+            self.bonus = cfg["bonuses"][tier_index]
+        else:
+            self.bonus = cfg["intervals"][tier_index]
+        self.base_cost = cfg["base_costs"][tier_index]
+        self.label = cfg["label"]
+        self.suffix = cfg["suffix"]
+
+        self.price = 0  # computed by manager based on state
+
+    def update_price_from_state(self, state):
+        """Recompute price based on cumulative spend in this category."""
+        spent = {
+            "click_power": state.spent_click_power,
+            "passive_income": state.spent_passive_income,
+            "auto_clicker_speed": state.spent_auto_speed,
+        }[self.category]
+        # Price = cumulative spent + base cost of this tier.
+        # Guarantees each tier costs more than all previous combined.
+        self.price = spent + self.base_cost
+
+    def can_afford(self, state):
+        return state.score >= self.price
+
+    def apply(self, state):
+        """Purchase this tier: deduct score, apply bonus, increase tier level."""
+        if not self.can_afford(state):
+            return False
+
+        state.score -= self.price
+
+        if self.category == "click_power":
+            state.click_power += self.bonus
+            state.tier_click_power += 1
+            state.spent_click_power += self.price
+        elif self.category == "passive_income":
+            state.click_speed += self.bonus
+            state.tier_passive_income += 1
+            state.spent_passive_income += self.price
+        elif self.category == "auto_clicker_speed":
+            # Lower the interval (faster clicks). Never below 0.05.
+            if self.bonus < state.auto_clicker_interval:
+                state.auto_clicker_interval = max(0.05, self.bonus)
+            state.tier_auto_speed += 1
+            state.spent_auto_speed += self.price
+
+        return True
 
     def update(self, mouse_pos):
         self.is_hovered = self.rect.collidepoint(mouse_pos)
 
-    def draw(self, surf):
-        color = self.hover_color if self.is_hovered else self.color
-        pygame.draw.rect(surf, color, self.rect, border_radius=10)
-        pygame.draw.rect(surf, WHITE, self.rect, width=3, border_radius=10)
-        text_surf = font_med.render(self.name, True, self.text_color)
-        text_rect = text_surf.get_rect(center=self.rect.center)
-        surf.blit(text_surf, text_rect)
+    def draw(self, surf, state):
+        self.update_price_from_state(state)
+        if not self.can_afford(state):
+            color = GRAY  # grayed out if too expensive
+        else:
+            color = DARK_BLUE if self.is_hovered else BLUE
+
+        pygame.draw.rect(surf, color, self.rect, border_radius=8)
+        pygame.draw.rect(surf, WHITE, self.rect, width=2, border_radius=8)
+
+        name_surf = font_med.render(f"{self.label} {self.tier_index + 1}", True, WHITE)
+        cost_surf = font_small.render(f"Cost: {int(self.price)}", True, YELLOW)
+        bonus_surf = font_tiny.render(f"+{self.bonus}{self.suffix}", True, WHITE)
+
+        total_h = name_surf.get_height() + cost_surf.get_height() + bonus_surf.get_height() + 10
+        start_y = self.rect.centery - total_h // 2
+
+        name_rect = name_surf.get_rect(centerx=self.rect.centerx, y=start_y)
+        cost_rect = cost_surf.get_rect(centerx=self.rect.centerx,
+                                       y=start_y + name_surf.get_height() + 4)
+        bonus_rect = bonus_surf.get_rect(centerx=self.rect.centerx,
+                                         y=start_y + name_surf.get_height()
+                                         + cost_surf.get_height() + 8)
+
+        surf.blit(name_surf, name_rect)
+        surf.blit(cost_surf, cost_rect)
+        surf.blit(bonus_surf, bonus_rect)
 
     def is_clicked(self, event):
         return (
@@ -165,205 +312,214 @@ class ButtonBase:
             and self.rect.collidepoint(event.pos)
         )
 
-    def apply(self, game):
-        pass
 
-
-class UpgradesButton(ButtonBase):
-
-    def __init__(self, x, y):
-        super().__init__(x, y, 180, 50, "Upgrades", 0, PINK, DARK_BLUE)
-
-    def apply(self, game):
-        game["upgrades_open"] = not game["upgrades_open"]
-
-
-class UpgradeClickButton(ButtonBase):
-
-    def __init__(self, x, y, price=10):
-        super().__init__(
-            x, y, 260, 50, f"Upgrade Click (+1)", price, BLUE, DARK_BLUE
-        )
-
-    def apply(self, game):
-        global upg_p
-        if game["score"] >= self.price:
-            game["score"] -= self.price
-            game["clk_p"] += 1
-            self.price = int(self.price * 1.5) + 5
-            upg_p = self.price
-            self.name = f"Upgrade Click (+1) - Cost: {self.price}"
-
-
-class ClickSpeedButton(ButtonBase):
-
-    def __init__(self, x, y, price=50):
-        super().__init__(
-            x, y, 260, 50, f"Click Speed (+1/s)", price, GREEN, DARK_BLUE
-        )
-
-    def apply(self, game):
-        global clk_spd_p
-        if game["score"] >= self.price:
-            game["score"] -= self.price
-            game["clk_spd"] += 1
-            self.price = int(self.price * 1.5) + 25
-            clk_spd_p = self.price
-            self.name = f"Click Speed (+1/s) - Cost: {self.price}"
-
-
-class AutoClickerButton(ButtonBase):
-
-    def __init__(self, x, y, price=100):
-        super().__init__(
-            x, y, 260, 50, f"Auto Clicker", price, GREEN, DARK_BLUE
-        )
-
-    def apply(self, game):
-        global auto_p
-        if game["score"] >= self.price:
-            game["score"] -= self.price
-            game["auto_cnt"] += 1
-            self.price = int(self.price * 1.5) + 50
-            auto_p = self.price
-            self.name = f"Auto Clicker - Cost: {self.price}"
-
-
-class CloseUpgradesButton(ButtonBase):
-
-    def __init__(self, x, y):
-        super().__init__(x, y, 40, 40, "X", 0, RED, (150, 40, 40))
-
-    def apply(self, game):
-        game["upgrades_open"] = False
-
-
-# --- SETUP BUTTON INSTANCES ---
-btn_upgrades = UpgradesButton(20, SCREEN_H // 2 - 25)
-
-PANEL_W = 320
-BTN_W = 260
-BTN_H = 50
+# ----------------------------------------------------------------------------
+# STEP 9: BUILD ALL UPGRADE INSTANCES (data-driven, no hardcoded buttons)
+# ----------------------------------------------------------------------------
+PANEL_W = 340
+PANEL_X = 0
+PANEL_Y = 150
+BTN_W = 280
+BTN_H = 80
 BTN_X = (PANEL_W - BTN_W) // 2
-BTN_Y_START = 220
-BTN_GAP = 70
+BTN_GAP = 100
 
-btn_upgrade_click = UpgradeClickButton(BTN_X, BTN_Y_START, upg_p)
-btn_click_speed = ClickSpeedButton(BTN_X, BTN_Y_START + BTN_GAP, clk_spd_p)
-btn_auto_clicker = AutoClickerButton(BTN_X, BTN_Y_START + BTN_GAP * 2, auto_p)
-btn_close_upgrades = CloseUpgradesButton(PANEL_W - 60, 170)
+def build_upgrades():
+    """Create one Upgrade object per tier per category."""
+    upgrades = []
+    BTN_Y_START = 200
 
-# --- MAIN GAME LOOP ---
+    # Click Power tiers
+    for i in range(MAX_TIERS["click_power"]):
+        upgrades.append(Upgrade("click_power", i, BTN_X, BTN_Y_START + i * BTN_GAP,
+                                BTN_W, BTN_H))
+
+    # Passive Income tiers
+    passive_start = BTN_Y_START + MAX_TIERS["click_power"] * BTN_GAP + 40
+    for i in range(MAX_TIERS["passive_income"]):
+        upgrades.append(Upgrade("passive_income", i, BTN_X, passive_start + i * BTN_GAP,
+                                BTN_W, BTN_H))
+
+    # Auto-Clicker Speed tiers
+    auto_start = passive_start + MAX_TIERS["passive_income"] * BTN_GAP + 40
+    for i in range(MAX_TIERS["auto_clicker_speed"]):
+        upgrades.append(Upgrade("auto_clicker_speed", i, BTN_X, auto_start + i * BTN_GAP,
+                                BTN_W, BTN_H))
+
+    return upgrades
+
+
+all_upgrades = build_upgrades()
+
+
+class CloseButton:
+    """Small X button at top-right of the upgrades panel."""
+
+    def __init__(self, x, y, w, h):
+        self.rect = pygame.Rect(x, y, w, h)
+        self.is_hovered = False
+
+    def update(self, mouse_pos):
+        self.is_hovered = self.rect.collidepoint(mouse_pos)
+
+    def draw(self, surf):
+        color = (150, 40, 40) if self.is_hovered else RED
+        pygame.draw.rect(surf, color, self.rect, border_radius=8)
+        pygame.draw.rect(surf, WHITE, self.rect, width=2, border_radius=8)
+        x_surf = font_med.render("X", True, WHITE)
+        surf.blit(x_surf, x_surf.get_rect(center=self.rect.center))
+
+    def is_clicked(self, event):
+        return (
+            event.type == pygame.MOUSEBUTTONDOWN
+            and event.button == 1
+            and self.rect.collidepoint(event.pos)
+        )
+
+
+btn_close_upgrades = CloseButton(PANEL_W - 60, 170, 40, 40)
+
+# ----------------------------------------------------------------------------
+# STEP 10: SCROLLABLE PANEL LOGIC
+# ----------------------------------------------------------------------------
+PANEL_CONTENT_H = (MAX_TIERS["click_power"] + MAX_TIERS["passive_income"] +
+                   MAX_TIERS["auto_clicker_speed"]) * BTN_GAP + 200
+scroll_offset = 0
+max_scroll = max(0, PANEL_CONTENT_H - (SCREEN_H - PANEL_Y - 40))
+
+def get_visible_upgrades():
+    """Return (upgrade, draw_rect) pairs for upgrades that overlap the panel."""
+    visible = []
+    for upg in all_upgrades:
+        draw_rect = upg.rect.copy()
+        draw_rect.y -= scroll_offset
+        if draw_rect.bottom > PANEL_Y + 60 and draw_rect.top < SCREEN_H - 20:
+            visible.append((upg, draw_rect))
+    return visible
+
+# ----------------------------------------------------------------------------
+# STEP 11: INITIALIZE STATE FROM SAVE
+# ----------------------------------------------------------------------------
+state = load_game()
+
+# ----------------------------------------------------------------------------
+# STEP 12: MAIN GAME LOOP
+# ----------------------------------------------------------------------------
 running = True
+upgrades_open = False
+pop_timer = 0
+pop_scale = 1.0
+
+# "Open Upgrades" button rect (left middle, only when panel closed)
+open_btn_rect = pygame.Rect(20, SCREEN_H // 2 - 25, 180, 50)
+
+# Rebirth button (under Upgrades)
+rebirth_btn_rect = pygame.Rect(20, SCREEN_H // 2 + 35, 180, 50)
+
+# Skins button (under Rebirth)
+skins_btn_rect = pygame.Rect(20, SCREEN_H // 2 + 95, 180, 50)
+
 while running:
     mouse_pos = pygame.mouse.get_pos()
 
+    # --- EVENT HANDLING ---
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
-            save_game(
-                score, clk_p, clk_total, clk_spd, auto_cnt, upg_p, clk_spd_p, auto_p
-            )
+            save_game(state)
             running = False
 
+        # Mouse wheel: scroll the upgrades panel
+        if event.type == pygame.MOUSEWHEEL and upgrades_open:
+            scroll_offset -= event.y * 30
+            scroll_offset = max(0, min(scroll_offset, max_scroll))
+
+        # --- Click on the big clickable picture ---
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if clicker_rect.collidepoint(event.pos):
-                score += clk_p
-                clk_total += 1
+                gain = int(state.click_power * state.rebirth_multiplier)
+                state.score += gain
+                state.clicks_total += 1
                 pop_timer = 10
                 pop_scale = 1.3
 
-        if not upgrades_open and btn_upgrades.is_clicked(event):
-            upgrades_open = True
+            # --- Open Upgrades button (only when panel closed) ---
+            if not upgrades_open and open_btn_rect.collidepoint(event.pos):
+                upgrades_open = True
 
-        if upgrades_open:
-            state = {
-                "score": score,
-                "clk_p": clk_p,
-                "clk_total": clk_total,
-                "clk_spd": clk_spd,
-                "auto_cnt": auto_cnt,
-                "upgrades_open": upgrades_open,
-            }
+            # --- Rebirth button (only when panel closed) ---
+            if not upgrades_open and rebirth_btn_rect.collidepoint(event.pos):
+                if state.score >= state.rebirth_cost:
+                    state.score = 0
+                    state.click_power = 1
+                    state.clicks_total = 0
+                    state.click_speed = 0
+                    state.auto_clicker_count = 0
+                    state.auto_clicker_interval = 1.0
+                    state.auto_clicker_timer = 0.0
+                    state.tier_click_power = 0
+                    state.tier_passive_income = 0
+                    state.tier_auto_speed = 0
+                    state.spent_click_power = 0
+                    state.spent_passive_income = 0
+                    state.spent_auto_speed = 0
+                    state.rebirth_count += 1
+                    state.rebirth_multiplier *= 2.0
+                    state.rebirth_cost = int(state.rebirth_cost * 10)
+                    save_game(state)
 
-            if btn_upgrade_click.is_clicked(event):
-                btn_upgrade_click.apply(state)
-                score = state["score"]
-                clk_p = state["clk_p"]
-                save_game(
-                    score,
-                    clk_p,
-                    clk_total,
-                    clk_spd,
-                    auto_cnt,
-                    upg_p,
-                    clk_spd_p,
-                    auto_p,
-                )
+            # --- Skins button (placeholder) ---
+            if not upgrades_open and skins_btn_rect.collidepoint(event.pos):
+                print("[CLICKER] Skins - coming soon!")
 
-            if btn_click_speed.is_clicked(event):
-                btn_click_speed.apply(state)
-                score = state["score"]
-                clk_spd = state["clk_spd"]
-                save_game(
-                    score,
-                    clk_p,
-                    clk_total,
-                    clk_spd,
-                    auto_cnt,
-                    upg_p,
-                    clk_spd_p,
-                    auto_p,
-                )
+            # --- Clicks inside the upgrades panel ---
+            if upgrades_open:
+                if btn_close_upgrades.is_clicked(event):
+                    upgrades_open = False
 
-            if btn_auto_clicker.is_clicked(event):
-                btn_auto_clicker.apply(state)
-                score = state["score"]
-                auto_cnt = state["auto_cnt"]
-                save_game(
-                    score,
-                    clk_p,
-                    clk_total,
-                    clk_spd,
-                    auto_cnt,
-                    upg_p,
-                    clk_spd_p,
-                    auto_p,
-                )
-
-            if btn_close_upgrades.is_clicked(event):
-                btn_close_upgrades.apply(state)
-                upgrades_open = state["upgrades_open"]
+                for upg, draw_rect in get_visible_upgrades():
+                    # Temporarily swap rect for click detection
+                    saved_rect = upg.rect
+                    upg.rect = draw_rect
+                    if upg.is_clicked(event):
+                        if upg.apply(state):
+                            save_game(state)
+                    upg.rect = saved_rect
 
     # --- UPDATE ---
-    btn_upgrades.update(mouse_pos)
+    btn_close_upgrades.update(mouse_pos)
     if upgrades_open:
-        btn_upgrade_click.update(mouse_pos)
-        btn_click_speed.update(mouse_pos)
-        btn_auto_clicker.update(mouse_pos)
-        btn_close_upgrades.update(mouse_pos)
+        for upg, draw_rect in get_visible_upgrades():
+            saved_rect = upg.rect
+            upg.rect = draw_rect
+            upg.update(mouse_pos)
+            upg.rect = saved_rect
 
+    # --- Pop animation ---
     if pop_timer > 0:
         pop_timer -= 1
         pop_scale = 1.0 + (0.3 * (pop_timer / 10))
     else:
         pop_scale = 1.0
 
+    # --- Passive income (points per second) ---
     dt = clock.tick(FPS) / 1000.0
-    score += clk_spd * dt
+    state.score += state.click_speed * state.rebirth_multiplier * dt
 
-    auto_timer += dt
-    if auto_cnt > 0:
-        interval = 1.0 / auto_cnt
-        while auto_timer >= interval:
-            auto_timer -= interval
-            score += clk_p
-            clk_total += 1
+    # --- Auto Clicker ---
+    state.auto_clicker_timer += dt
+    if state.auto_clicker_count > 0:
+        interval = state.auto_clicker_interval / max(1, state.auto_clicker_count)
+        while state.auto_clicker_timer >= interval:
+            state.auto_clicker_timer -= interval
+            state.score += int(state.click_power * state.rebirth_multiplier)
+            state.clicks_total += 1
             pop_timer = 10
             pop_scale = 1.3
 
     # --- DRAWING ---
     screen.blit(bg_img, (0, 0))
 
+    # Draw clickable picture
     if pop_scale != 1.0:
         new_w = int(clicker_img.get_width() * pop_scale)
         new_h = int(clicker_img.get_height() * pop_scale)
@@ -373,51 +529,91 @@ while running:
     else:
         screen.blit(clicker_img, clicker_rect)
 
+    # --- Draw upgrades panel ---
     if upgrades_open:
-        panel_rect = pygame.Rect(0, 150, PANEL_W, SCREEN_H - 150)
-        pygame.draw.rect(screen, (40, 40, 60), panel_rect)
-        pygame.draw.rect(screen, WHITE, panel_rect, width=3)
+        panel_rect = pygame.Rect(PANEL_X, PANEL_Y, PANEL_W, SCREEN_H - PANEL_Y)
+        pygame.draw.rect(screen, PANEL_BG, panel_rect)
+        pygame.draw.rect(screen, PANEL_BORDER, panel_rect, width=3)
 
+        # Panel title
         panel_title = font_med.render("UPGRADES", True, YELLOW)
-        screen.blit(panel_title, (panel_rect.x + 20, panel_rect.y + 20))
+        screen.blit(panel_title, (PANEL_X + 20, PANEL_Y + 20))
 
-        btn_upgrade_click.draw(screen)
-        btn_click_speed.draw(screen)
-        btn_auto_clicker.draw(screen)
+        # Scroll indicator
+        if max_scroll > 0:
+            scroll_text = font_tiny.render(f"Scroll {scroll_offset}/{max_scroll}",
+                                           True, GRAY)
+            screen.blit(scroll_text, (PANEL_X + 20, PANEL_Y + 55))
+
+        # Draw upgrades (with scroll applied to their rects)
+        for upg, draw_rect in get_visible_upgrades():
+            saved_rect = upg.rect
+            upg.rect = draw_rect
+            upg.draw(screen, state)
+            upg.rect = saved_rect
+
+        # X close button (fixed at top-right of panel, not scrolled)
         btn_close_upgrades.draw(screen)
-    else:
-        btn_upgrades.draw(screen)
 
-    # UI Text
-    score_text = font_big.render(f"Score: {int(score)}", True, YELLOW)
+    # --- Draw the "Open Upgrades" button (only when panel closed) ---
+    if not upgrades_open:
+        # Upgrades button
+        open_color = DARK_BLUE if open_btn_rect.collidepoint(mouse_pos) else PINK
+        pygame.draw.rect(screen, open_color, open_btn_rect, border_radius=10)
+        pygame.draw.rect(screen, WHITE, open_btn_rect, width=3, border_radius=10)
+        open_text = font_med.render("Upgrades", True, WHITE)
+        screen.blit(open_text, open_text.get_rect(center=open_btn_rect.center))
+
+        # Rebirth button
+        rebirth_color = DARK_BLUE if rebirth_btn_rect.collidepoint(mouse_pos) else RED
+        if state.score < state.rebirth_cost:
+            rebirth_color = GRAY
+        pygame.draw.rect(screen, rebirth_color, rebirth_btn_rect, border_radius=10)
+        pygame.draw.rect(screen, WHITE, rebirth_btn_rect, width=3, border_radius=10)
+        rebirth_text = font_med.render("Rebirth", True, WHITE)
+        screen.blit(rebirth_text, rebirth_text.get_rect(center=rebirth_btn_rect.center))
+        rebirth_cost_text = font_small.render(f"Cost: {int(state.rebirth_cost)}", True, YELLOW)
+        screen.blit(rebirth_cost_text, rebirth_cost_text.get_rect(
+            centerx=rebirth_btn_rect.centerx, y=rebirth_btn_rect.bottom - 20))
+
+        # Skins button
+        skins_color = DARK_BLUE if skins_btn_rect.collidepoint(mouse_pos) else BLUE
+        pygame.draw.rect(screen, skins_color, skins_btn_rect, border_radius=10)
+        pygame.draw.rect(screen, WHITE, skins_btn_rect, width=3, border_radius=10)
+        skins_text = font_med.render("Skins", True, WHITE)
+        screen.blit(skins_text, skins_text.get_rect(center=skins_btn_rect.center))
+        skins_sub = font_tiny.render("(coming soon)", True, GRAY)
+        screen.blit(skins_sub, skins_sub.get_rect(
+            centerx=skins_btn_rect.centerx, y=skins_btn_rect.bottom - 20))
+
+    # --- UI TEXT ---
+    score_text = font_big.render(f"Score: {int(state.score)}", True, YELLOW)
     screen.blit(score_text, (SCREEN_W // 2 - score_text.get_width() // 2, 40))
 
-    power_text = font_med.render(f"Points per click: {clk_p}", True, WHITE)
+    power_text = font_med.render(f"Points per click: {state.click_power}",
+                                 True, WHITE)
     screen.blit(power_text, (SCREEN_W // 2 - power_text.get_width() // 2, 100))
 
-    clicks_text = font_small.render(f"Total clicks: {clk_total}", True, WHITE)
+    clicks_text = font_small.render(f"Total clicks: {state.clicks_total}",
+                                    True, WHITE)
     screen.blit(clicks_text, (SCREEN_W // 2 - clicks_text.get_width() // 2, 140))
 
-    if clk_spd > 0 or auto_cnt > 0:
+    # Passive income display
+    if state.click_speed > 0 or state.auto_clicker_count > 0:
         passive_text = font_small.render(
-            f"+{clk_spd}/s  Auto: {auto_cnt}", True, GREEN
-        )
-        screen.blit(
-            passive_text, (SCREEN_W // 2 - passive_text.get_width() // 2, 170)
-        )
+            f"+{int(state.click_speed)}/s  Auto: {state.auto_clicker_count}"
+            f" (every {state.auto_clicker_interval:.2f}s)", True, GREEN)
+        screen.blit(passive_text, (SCREEN_W // 2 - passive_text.get_width() // 2, 170))
 
-    instr = font_small.render(
-        "Click the picture to gain points!", True, GRAY
-    )
-    screen.blit(
-        instr, (SCREEN_W // 2 - instr.get_width() // 2, SCREEN_H - 160)
-    )
-
-    if score < btn_upgrade_click.price:
-        hint = font_small.render("Not enough points yet!", True, RED)
-        screen.blit(hint, (SCREEN_W // 2 - hint.get_width() // 2, SCREEN_H - 130))
+    # Instructions
+    instr = font_small.render("Click the picture to gain points!", True, GRAY)
+    screen.blit(instr, (SCREEN_W // 2 - instr.get_width() // 2, SCREEN_H - 160))
 
     pygame.display.flip()
 
+# ----------------------------------------------------------------------------
+# STEP 13: CLEANUP AND EXIT
+# ----------------------------------------------------------------------------
+save_game(state)
 pygame.quit()
 sys.exit()
