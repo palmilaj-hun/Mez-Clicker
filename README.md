@@ -1,5 +1,3 @@
-Here is the fully fused and organized version of your complete `README.md` file, ready to copy and paste directly into your repository:
-
 ```markdown
 # Mező Clicker 🎮
 
