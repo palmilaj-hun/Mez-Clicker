@@ -16,8 +16,13 @@ import pygame
 # ----------------------------------------------------------------------------
 pygame.init()
 
-# ----------------------------------------------------------------------------
-# STEP 1: WINDOW SETTINGS
+def format_num(n):
+    n = int(n)
+    if n >= 1_000_000:
+        return f"{n/1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n/1_000:.1f}k"
+    return str(n)
 # ----------------------------------------------------------------------------
 SCREEN_W, SCREEN_H = 1000, 700
 screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
@@ -341,7 +346,7 @@ class Upgrade:
         pygame.draw.rect(surf, WHITE, self.rect, width=2, border_radius=8)
 
         name_surf = font_med.render(f"{self.label} {self.tier_index + 1}", True, WHITE)
-        cost_surf = font_small.render(f"Cost: {int(self.price)}", True, YELLOW)
+        cost_surf = font_small.render(f"Cost: {format_num(self.price)}", True, YELLOW)
         bonus_surf = font_tiny.render(f"+{self.bonus}{self.suffix}", True, WHITE)
 
         total_h = name_surf.get_height() + cost_surf.get_height() + bonus_surf.get_height() + 10
@@ -678,7 +683,7 @@ while running:
         pygame.draw.rect(screen, WHITE, rebirth_btn_rect, width=3, border_radius=10)
         rebirth_text = font_med.render("Rebirth", True, WHITE)
         screen.blit(rebirth_text, rebirth_text.get_rect(center=rebirth_btn_rect.center))
-        rebirth_cost_text = font_small.render(f"Cost: {int(state.rebirth_cost)}", True, YELLOW)
+        rebirth_cost_text = font_small.render(f"Cost: {format_num(state.rebirth_cost)}", True, YELLOW)
         screen.blit(rebirth_cost_text, rebirth_cost_text.get_rect(
             centerx=rebirth_btn_rect.centerx, y=rebirth_btn_rect.bottom - 20))
 
@@ -747,7 +752,7 @@ while running:
                 y += 220
 
     # --- UI TEXT ---
-    score_text = font_big.render(f"Score: {int(state.score)}", True, YELLOW)
+    score_text = font_big.render(f"Score: {format_num(state.score)}", True, YELLOW)
     screen.blit(score_text, (SCREEN_W // 2 - score_text.get_width() // 2, 40))
 
     power_text = font_med.render(f"Points per click: {state.click_power}",
