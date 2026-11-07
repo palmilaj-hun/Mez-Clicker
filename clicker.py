@@ -432,6 +432,8 @@ def get_visible_upgrades():
 # STEP 11: INITIALIZE STATE FROM SAVE
 # ----------------------------------------------------------------------------
 state = load_game()
+if state.current_skin not in skin_images:
+    state.current_skin = "Szomszéd"
 if state.current_skin in skin_images:
     clicker_img = skin_images[state.current_skin]
     clicker_rect = clicker_img.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2))
