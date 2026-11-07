@@ -8,6 +8,7 @@
 import os
 import sys
 import json
+import random
 import pygame
 
 # ----------------------------------------------------------------------------
@@ -80,7 +81,18 @@ SKIN_FILES = {
     "UtcaRéme": "mezo2.jpg",
     "SuliFélelme": "mezo3.jpg",
     "PacekMező": "mezo4.webp",
+    "Cicafül": "mezo5.jpg",
+    "Osztályföni": "mezo6.jpg",
+    "Vicces": "mezo7.jpg",
+    "Mosoly": "mezo8.png",
+    "'Mi'?": "mezo9.png",
+    "Vigyor": "mezo10.png",
+    "'MivanItt'": "mezo11.png",
+    "4km-re": "mezo12.gif",
+    "ShyMezo": "mezo13.png",
 }
+
+SKIN_MULTIPLIERS = {name: round(1.0 + i * 0.15, 2) for i, name in enumerate(SKIN_FILES.keys())}
 
 def load_skin_image(name):
     path = os.path.join(BASE, SKIN_FILES[name])
@@ -90,12 +102,13 @@ def load_skin_image(name):
         return img
     except (pygame.error, FileNotFoundError):
         print(f"[CLICKER] skin {name} not found")
-        return None
+        surf = pygame.Surface((180, 180))
+        surf.fill((random.randint(50,200), random.randint(50,200), random.randint(50,200)))
+        txt = font_small.render(name, True, WHITE)
+        surf.blit(txt, txt.get_rect(center=(90,90)))
+        return surf
 
 skin_images = {name: load_skin_image(name) for name in SKIN_FILES}
-for name, img in skin_images.items():
-    if img is None:
-        skin_images[name] = clicker_img.copy()
 
 # ----------------------------------------------------------------------------
 # STEP 5: TIER CONFIGURATION (data-driven upgrade definitions)
@@ -165,8 +178,11 @@ class GameState:
         self.rebirth_multiplier = 1.0   # global multiplier on all gains
 
         # Skins
-        self.current_skin = "default"
-        self.owned_skins = ["default"]
+        self.current_skin = "Szomszéd"
+        self.owned_skins = ["Szomszéd"]
+        self.skin_multiplier = SKIN_MULTIPLIERS.get(self.current_skin, 1.0)
+        self.gamble_timer = 0
+        self.gamble_result = None
 
     def to_dict(self):
         return {
@@ -187,6 +203,9 @@ class GameState:
             "rebirth_multiplier": self.rebirth_multiplier,
             "current_skin": self.current_skin,
             "owned_skins": self.owned_skins,
+            "skin_multiplier": self.skin_multiplier,
+            "gamble_timer": self.gamble_timer,
+            "gamble_result": self.gamble_result,
         }
 
     @classmethod
@@ -208,7 +227,10 @@ class GameState:
         s.rebirth_cost = d.get("rebirth_cost", 1000)
         s.rebirth_multiplier = d.get("rebirth_multiplier", 1.0)
         s.current_skin = d.get("current_skin", "default")
-        s.owned_skins = d.get("owned_skins", ["default"])
+        s.owned_skins = d.get("owned_skins", ["Szomszéd"])
+        s.skin_multiplier = d.get("skin_multiplier", SKIN_MULTIPLIERS.get(s.current_skin, 1.0))
+        s.gamble_timer = d.get("gamble_timer", 0)
+        s.gamble_result = d.get("gamble_result", None)
         return s
 
 
@@ -445,6 +467,7 @@ running = True
 upgrades_open = False
 skins_open = False
 skin_rects = []
+skin_scroll = 0
 pop_timer = 0
 pop_scale = 1.0
 
@@ -456,6 +479,9 @@ rebirth_btn_rect = pygame.Rect(20, SCREEN_H // 2 + 35, 180, 50)
 
 # Skins button (under Rebirth)
 skins_btn_rect = pygame.Rect(20, SCREEN_H // 2 + 95, 180, 50)
+
+# Gambling button (under Skins)
+gamble_btn_rect = pygame.Rect(20, SCREEN_H // 2 + 155, 180, 50)
 
 while running:
     mouse_pos = pygame.mouse.get_pos()
@@ -470,11 +496,14 @@ while running:
         if event.type == pygame.MOUSEWHEEL and upgrades_open:
             scroll_offset -= event.y * 30
             scroll_offset = max(0, min(scroll_offset, max_scroll))
+        if event.type == pygame.MOUSEWHEEL and skins_open:
+            skin_scroll -= event.y * 30
+            skin_scroll = max(0, skin_scroll)
 
         # --- Click on the big clickable picture ---
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if clicker_rect.collidepoint(event.pos):
-                gain = int(state.click_power * state.rebirth_multiplier)
+                gain = int(state.click_power * state.rebirth_multiplier * state.skin_multiplier)
                 state.score += gain
                 state.clicks_total += 1
                 pop_timer = 10
@@ -510,6 +539,15 @@ while running:
             if not upgrades_open and skins_btn_rect.collidepoint(event.pos):
                 skins_open = not skins_open
 
+            # --- Gambling button ---
+            if not upgrades_open and gamble_btn_rect.collidepoint(event.pos):
+                if state.gamble_timer == 0 and state.score >= 100000:
+                    state.score -= 100000
+                    reward = random.choice(list(SKIN_FILES.keys())[4:])
+                    state.gamble_timer = 120
+                    state.gamble_result = reward
+                    save_game(state)
+
             # --- Clicks inside the upgrades panel ---
             if upgrades_open:
                 if btn_close_upgrades.is_clicked(event):
@@ -530,6 +568,7 @@ while running:
                     if r.collidepoint(event.pos):
                         if name == "default" or name in state.owned_skins:
                             state.current_skin = name
+                            state.skin_multiplier = SKIN_MULTIPLIERS.get(name, 1.0)
                             clicker_img = skin_images[name]
                             clicker_rect = clicker_img.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2))
                             save_game(state)
@@ -562,7 +601,17 @@ while running:
     dt = clock.tick(FPS) / 1000.0
     state.score += state.click_speed * state.rebirth_multiplier * dt
 
-    # --- Auto Clicker ---
+    # --- Gambling animation timer ---
+    if state.gamble_timer > 0:
+        state.gamble_timer -= 1
+        if state.gamble_timer == 0 and state.gamble_result:
+            reward = state.gamble_result
+            if reward in state.owned_skins:
+                state.score += 10000
+            else:
+                state.owned_skins.append(reward)
+            state.gamble_result = None
+            save_game(state)
     state.auto_clicker_timer += dt
     if state.auto_clicker_count > 0:
         interval = state.auto_clicker_interval / max(1, state.auto_clicker_count)
@@ -640,6 +689,36 @@ while running:
         skins_text = font_med.render("Skins", True, WHITE)
         screen.blit(skins_text, skins_text.get_rect(center=skins_btn_rect.center))
 
+    # --- Gambling button ---
+    if not upgrades_open:
+        gamble_color = DARK_BLUE if gamble_btn_rect.collidepoint(mouse_pos) else (180, 100, 0)
+        pygame.draw.rect(screen, gamble_color, gamble_btn_rect, border_radius=10)
+        pygame.draw.rect(screen, WHITE, gamble_btn_rect, width=3, border_radius=10)
+        gamble_text = font_med.render("Gamble", True, WHITE)
+        screen.blit(gamble_text, gamble_text.get_rect(center=gamble_btn_rect.center))
+        gamble_sub = font_tiny.render("100000", True, YELLOW)
+        screen.blit(gamble_sub, gamble_sub.get_rect(centerx=gamble_btn_rect.centerx, y=gamble_btn_rect.bottom - 20))
+
+    # --- Gambling animation ---
+    if state.gamble_timer > 60:
+        names = list(SKIN_FILES.keys())[4:]
+        offset = (120 - state.gamble_timer) * 12
+        for i, nm in enumerate(names * 3):
+            x = SCREEN_W - (i * 120) + (offset % (len(names) * 120))
+            img = skin_images.get(nm, clicker_img)
+            r = pygame.Rect(x, 20, 100, 100)
+            screen.blit(pygame.transform.scale(img, (100, 100)), r)
+            pygame.draw.rect(screen, WHITE, r, width=2, border_radius=6)
+        center_rect = pygame.Rect(SCREEN_W // 2 - 50, 20, 100, 100)
+        pygame.draw.rect(screen, YELLOW, center_rect, width=4, border_radius=6)
+    elif state.gamble_timer > 0 and state.gamble_result:
+        img = skin_images.get(state.gamble_result, clicker_img)
+        r = pygame.Rect(SCREEN_W // 2 - 90, 20, 180, 180)
+        screen.blit(pygame.transform.scale(img, (180, 180)), r)
+        pygame.draw.rect(screen, YELLOW, r, width=4, border_radius=8)
+        txt = font_med.render(f"You got: {state.gamble_result}", True, WHITE)
+        screen.blit(txt, txt.get_rect(centerx=SCREEN_W // 2, y=210))
+
     # --- Skins panel ---
     skin_rects = []
     if skins_open:
@@ -649,7 +728,7 @@ while running:
         title = font_med.render("SKINS", True, YELLOW)
         screen.blit(title, (panel_rect.x + 20, panel_rect.y + 20))
         x = panel_rect.x + 30
-        y = panel_rect.y + 70
+        y = panel_rect.y + 70 - skin_scroll
         for name in SKIN_FILES:
             r = pygame.Rect(x, y, 180, 180)
             skin_rects.append((name, r))
