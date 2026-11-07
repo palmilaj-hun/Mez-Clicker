@@ -74,6 +74,29 @@ except (pygame.error, FileNotFoundError):
 
 clicker_rect = clicker_img.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2))
 
+# Skins
+SKIN_FILES = {
+    "Szomszéd": "mezodeafult.jpg",
+    "UtcaRéme": "mezo2.jpg",
+    "SuliFélelme": "mezo3.jpg",
+    "PacekMező": "mezo4.webp",
+}
+
+def load_skin_image(name):
+    path = os.path.join(BASE, SKIN_FILES[name])
+    try:
+        img = pygame.image.load(path).convert_alpha()
+        img = pygame.transform.scale(img, (180, 180))
+        return img
+    except (pygame.error, FileNotFoundError):
+        print(f"[CLICKER] skin {name} not found")
+        return None
+
+skin_images = {name: load_skin_image(name) for name in SKIN_FILES}
+for name, img in skin_images.items():
+    if img is None:
+        skin_images[name] = clicker_img.copy()
+
 # ----------------------------------------------------------------------------
 # STEP 5: TIER CONFIGURATION (data-driven upgrade definitions)
 # ----------------------------------------------------------------------------
@@ -141,6 +164,10 @@ class GameState:
         self.rebirth_cost = 1000        # cost of next rebirth (x10 each time)
         self.rebirth_multiplier = 1.0   # global multiplier on all gains
 
+        # Skins
+        self.current_skin = "default"
+        self.owned_skins = ["default"]
+
     def to_dict(self):
         return {
             "score": self.score,
@@ -158,6 +185,8 @@ class GameState:
             "rebirth_count": self.rebirth_count,
             "rebirth_cost": self.rebirth_cost,
             "rebirth_multiplier": self.rebirth_multiplier,
+            "current_skin": self.current_skin,
+            "owned_skins": self.owned_skins,
         }
 
     @classmethod
@@ -178,6 +207,8 @@ class GameState:
         s.rebirth_count = d.get("rebirth_count", 0)
         s.rebirth_cost = d.get("rebirth_cost", 1000)
         s.rebirth_multiplier = d.get("rebirth_multiplier", 1.0)
+        s.current_skin = d.get("current_skin", "default")
+        s.owned_skins = d.get("owned_skins", ["default"])
         return s
 
 
@@ -401,12 +432,17 @@ def get_visible_upgrades():
 # STEP 11: INITIALIZE STATE FROM SAVE
 # ----------------------------------------------------------------------------
 state = load_game()
+if state.current_skin in skin_images:
+    clicker_img = skin_images[state.current_skin]
+    clicker_rect = clicker_img.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2))
 
 # ----------------------------------------------------------------------------
 # STEP 12: MAIN GAME LOOP
 # ----------------------------------------------------------------------------
 running = True
 upgrades_open = False
+skins_open = False
+skin_rects = []
 pop_timer = 0
 pop_scale = 1.0
 
@@ -441,6 +477,7 @@ while running:
                 state.clicks_total += 1
                 pop_timer = 10
                 pop_scale = 1.3
+                save_game(state)
 
             # --- Open Upgrades button (only when panel closed) ---
             if not upgrades_open and open_btn_rect.collidepoint(event.pos):
@@ -467,9 +504,9 @@ while running:
                     state.rebirth_cost = int(state.rebirth_cost * 10)
                     save_game(state)
 
-            # --- Skins button (placeholder) ---
+            # --- Skins button ---
             if not upgrades_open and skins_btn_rect.collidepoint(event.pos):
-                print("[CLICKER] Skins - coming soon!")
+                skins_open = not skins_open
 
             # --- Clicks inside the upgrades panel ---
             if upgrades_open:
@@ -484,6 +521,24 @@ while running:
                         if upg.apply(state):
                             save_game(state)
                     upg.rect = saved_rect
+
+            # --- Clicks inside skins panel ---
+            if skins_open:
+                for name, r in skin_rects:
+                    if r.collidepoint(event.pos):
+                        if name == "default" or name in state.owned_skins:
+                            state.current_skin = name
+                            clicker_img = skin_images[name]
+                            clicker_rect = clicker_img.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2))
+                            save_game(state)
+                        else:
+                            required = list(SKIN_FILES.keys()).index(name)
+                            if state.rebirth_count >= required:
+                                state.owned_skins.append(name)
+                                state.current_skin = name
+                                clicker_img = skin_images[name]
+                                clicker_rect = clicker_img.get_rect(center=(SCREEN_W // 2, SCREEN_H // 2))
+                                save_game(state)
 
     # --- UPDATE ---
     btn_close_upgrades.update(mouse_pos)
@@ -582,9 +637,33 @@ while running:
         pygame.draw.rect(screen, WHITE, skins_btn_rect, width=3, border_radius=10)
         skins_text = font_med.render("Skins", True, WHITE)
         screen.blit(skins_text, skins_text.get_rect(center=skins_btn_rect.center))
-        skins_sub = font_tiny.render("(coming soon)", True, GRAY)
-        screen.blit(skins_sub, skins_sub.get_rect(
-            centerx=skins_btn_rect.centerx, y=skins_btn_rect.bottom - 20))
+
+    # --- Skins panel ---
+    skin_rects = []
+    if skins_open:
+        panel_rect = pygame.Rect(200, 150, SCREEN_W - 240, SCREEN_H - 200)
+        pygame.draw.rect(screen, PANEL_BG, panel_rect, border_radius=10)
+        pygame.draw.rect(screen, PANEL_BORDER, panel_rect, width=3, border_radius=10)
+        title = font_med.render("SKINS", True, YELLOW)
+        screen.blit(title, (panel_rect.x + 20, panel_rect.y + 20))
+        x = panel_rect.x + 30
+        y = panel_rect.y + 70
+        for name in SKIN_FILES:
+            r = pygame.Rect(x, y, 180, 180)
+            skin_rects.append((name, r))
+            img = skin_images[name]
+            screen.blit(img, r)
+            pygame.draw.rect(screen, WHITE if state.current_skin == name else GRAY, r, width=3, border_radius=8)
+            label = font_small.render(name, True, WHITE)
+            screen.blit(label, label.get_rect(centerx=r.centerx, y=r.bottom + 5))
+            if name != "default" and name not in state.owned_skins:
+                required = list(SKIN_FILES.keys()).index(name)
+                price_surf = font_small.render(f"Requires {required} rebirths", True, YELLOW)
+                screen.blit(price_surf, price_surf.get_rect(centerx=r.centerx, y=r.bottom + 25))
+            x += 210
+            if x + 180 > panel_rect.right:
+                x = panel_rect.x + 30
+                y += 220
 
     # --- UI TEXT ---
     score_text = font_big.render(f"Score: {int(state.score)}", True, YELLOW)
